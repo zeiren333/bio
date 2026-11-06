@@ -8,7 +8,6 @@
   "use strict";
 
   var doc = document;
-  var root = doc.documentElement;
   var body = doc.body;
   var intro = doc.getElementById("intro");
   var portal = doc.getElementById("portal");
@@ -51,7 +50,8 @@
     toastTimer: 0,
     toastHideTimer: 0,
     lastPercent: -1,
-    lastStatus: -1
+    lastStatus: -1,
+    lastDraw: 0
   };
   var canvasWidth = 0;
   var canvasHeight = 0;
@@ -274,7 +274,7 @@
   }
 
   function initStars() {
-    var count = canvasWidth < 700 ? 90 : 190;
+    var count = canvasWidth < 700 ? 70 : 170;
     var index;
 
     if (reduceMotion) {
@@ -371,7 +371,7 @@
     var percent = Math.round(charge * 100);
     var statusBucket = Math.floor(percent / 25) * 25;
 
-    root.style.setProperty("--charge", charge.toFixed(4));
+    intro.style.setProperty("--charge", charge.toFixed(3));
 
     if (portalValue && percent !== state.lastPercent) {
       portalValue.textContent = percent + "%";
@@ -448,7 +448,14 @@
     }
 
     renderCharge();
-    drawStars(dt);
+
+    if (state.warping || state.holding || state.charge > 0.001) {
+      state.lastDraw = current;
+      drawStars(dt);
+    } else if (current - state.lastDraw > 90) {
+      state.lastDraw = current;
+      drawStars(dt);
+    }
 
     if (state.introActive || state.warping || state.holding || state.charge > 0.001 || state.audioTarget !== null) {
       state.raf = window.requestAnimationFrame(frame);
@@ -557,15 +564,15 @@
     ensureLoop();
 
     window.clearTimeout(state.revealTimer);
-    state.revealTimer = window.setTimeout(revealPage, 2000);
+    state.revealTimer = window.setTimeout(revealPage, 1250);
 
     window.clearTimeout(state.hideTimer);
     state.hideTimer = window.setTimeout(function () {
       intro.hidden = true;
       state.introActive = false;
       state.charge = 0;
-      root.style.setProperty("--charge", "0");
-    }, 3700);
+      intro.style.setProperty("--charge", "0");
+    }, 2100);
   }
 
   function revealPage() {
@@ -598,7 +605,7 @@
       } catch (error) {
         main.focus();
       }
-    }, 900);
+    }, 700);
   }
 
   /* --------------------------------------------------------------

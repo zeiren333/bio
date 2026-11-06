@@ -69,47 +69,69 @@
         />
       </div>
 
-      <blockquote class="profile__bio">
-        <p class="profile__bio-text">
-          <span class="profile__bio-line">«Море, однажды околдовав,</span>
-          <span class="profile__bio-line">навсегда держит в сетях чуда»</span>
-          <span class="profile__bio-line profile__bio-line--author">— Жак Ив Кусто</span>
-        </p>
-      </blockquote>
+      <div class="profile__body">
+        <blockquote class="profile__bio">
+          <p class="profile__bio-text">
+            <span class="profile__bio-line">«Море, однажды околдовав,</span>
+            <span class="profile__bio-line">навсегда держит в сетях чуда»</span>
+            <span class="profile__bio-line profile__bio-line--author">— Жак Ив Кусто</span>
+          </p>
+        </blockquote>
 
-      <nav class="profile__links" aria-label="Мои Telegram-каналы">
-        <a
-          class="profile__link"
-          href="https://t.me/doxernet"
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="Telegram @doxernet"
-        >
-          <svg class="profile__icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
-            <path d="M12 0a12 12 0 1 0 0 24 12 12 0 0 0 0-24Zm4.96 7.22c.1 0 .32.03.46.14a.5.5 0 0 1 .18.33c.01.09.03.3.02.47-.18 1.9-.96 6.5-1.36 8.63-.17.9-.5 1.2-.82 1.23-.7.06-1.23-.46-1.9-.9-1.06-.7-1.65-1.13-2.68-1.8-1.19-.78-.42-1.21.26-1.91.18-.19 3.25-2.98 3.31-3.23 0-.03.01-.15-.06-.21-.06-.06-.17-.04-.24-.02-.11.02-1.8 1.14-5.07 3.34-.48.33-.91.49-1.3.48-.43 0-1.25-.24-1.86-.44-.76-.25-1.35-.37-1.3-.79.03-.22.33-.44.9-.66 3.5-1.53 5.83-2.53 7-3.02 3.33-1.38 4.02-1.63 4.47-1.63Z" />
-          </svg>
-          <span class="profile__link-text">@doxernet</span>
-        </a>
+        <nav class="profile__links" aria-label="Мои Telegram-каналы">
+          <a
+            class="profile__link"
+            href="https://t.me/doxernet"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="doxernet.t.me в Telegram"
+          >
+            <span class="profile__link-icon" aria-hidden="true">
+              <svg class="profile__icon" viewBox="0 0 24 24" fill="currentColor" focusable="false">
+                <path d="M12 0a12 12 0 1 0 0 24 12 12 0 0 0 0-24Zm4.96 7.22c.1 0 .32.03.46.14a.5.5 0 0 1 .18.33c.01.09.03.3.02.47-.18 1.9-.96 6.5-1.36 8.63-.17.9-.5 1.2-.82 1.23-.7.06-1.23-.46-1.9-.9-1.06-.7-1.65-1.13-2.68-1.8-1.19-.78-.42-1.21.26-1.91.18-.19 3.25-2.98 3.31-3.23 0-.03.01-.15-.06-.21-.06-.06-.17-.04-.24-.02-.11.02-1.8 1.14-5.07 3.34-.48.33-.91.49-1.3.48-.43 0-1.25-.24-1.86-.44-.76-.25-1.35-.37-1.3-.79.03-.22.33-.44.9-.66 3.5-1.53 5.83-2.53 7-3.02 3.33-1.38 4.02-1.63 4.47-1.63Z" />
+              </svg>
+            </span>
+            <span class="profile__link-meta">
+              <span class="profile__link-name">DoxerNet</span>
+              <span class="profile__link-handle">doxernet.t.me</span>
+            </span>
+            <svg class="profile__link-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M7 17 17 7" />
+              <path d="M8 7h9v9" />
+            </svg>
+          </a>
 
-        <a
-          class="profile__link"
-          href="https://t.me/rivalvisuals"
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="RivalVisuals в Telegram: @rivalvisuals"
-        >
-          <svg class="profile__icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
-            <path d="M12 0a12 12 0 1 0 0 24 12 12 0 0 0 0-24Zm4.96 7.22c.1 0 .32.03.46.14a.5.5 0 0 1 .18.33c.01.09.03.3.02.47-.18 1.9-.96 6.5-1.36 8.63-.17.9-.5 1.2-.82 1.23-.7.06-1.23-.46-1.9-.9-1.06-.7-1.65-1.13-2.68-1.8-1.19-.78-.42-1.21.26-1.91.18-.19 3.25-2.98 3.31-3.23 0-.03.01-.15-.06-.21-.06-.06-.17-.04-.24-.02-.11.02-1.8 1.14-5.07 3.34-.48.33-.91.49-1.3.48-.43 0-1.25-.24-1.86-.44-.76-.25-1.35-.37-1.3-.79.03-.22.33-.44.9-.66 3.5-1.53 5.83-2.53 7-3.02 3.33-1.38 4.02-1.63 4.47-1.63Z" />
-          </svg>
-          <span class="profile__link-text">@rivalvisuals</span>
-        </a>
-      </nav>
+          <a
+            class="profile__link"
+            href="https://t.me/rivalvisuals"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="rivalvisuals.t.me в Telegram"
+          >
+            <span class="profile__link-icon" aria-hidden="true">
+              <svg class="profile__icon" viewBox="0 0 24 24" fill="currentColor" focusable="false">
+                <path d="M12 0a12 12 0 1 0 0 24 12 12 0 0 0 0-24Zm4.96 7.22c.1 0 .32.03.46.14a.5.5 0 0 1 .18.33c.01.09.03.3.02.47-.18 1.9-.96 6.5-1.36 8.63-.17.9-.5 1.2-.82 1.23-.7.06-1.23-.46-1.9-.9-1.06-.7-1.65-1.13-2.68-1.8-1.19-.78-.42-1.21.26-1.91.18-.19 3.25-2.98 3.31-3.23 0-.03.01-.15-.06-.21-.06-.06-.17-.04-.24-.02-.11.02-1.8 1.14-5.07 3.34-.48.33-.91.49-1.3.48-.43 0-1.25-.24-1.86-.44-.76-.25-1.35-.37-1.3-.79.03-.22.33-.44.9-.66 3.5-1.53 5.83-2.53 7-3.02 3.33-1.38 4.02-1.63 4.47-1.63Z" />
+              </svg>
+            </span>
+            <span class="profile__link-meta">
+              <span class="profile__link-name">RivalVisuals</span>
+              <span class="profile__link-handle">rivalvisuals.t.me</span>
+            </span>
+            <svg class="profile__link-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M7 17 17 7" />
+              <path d="M8 7h9v9" />
+            </svg>
+          </a>
+        </nav>
 
-      <div class="profile__divider" role="presentation"></div>
+        <div class="profile__divider" role="presentation"></div>
 
-      <footer class="profile__footer">
-        <a class="profile__credit" href="https://t.me/doxernet" target="_blank" rel="noopener noreferrer">made by Wiskas</a>
-      </footer>
+        <footer class="profile__footer">
+          <a class="profile__credit" href="https://t.me/doxernet" target="_blank" rel="noopener noreferrer">doxernet.t.me</a>
+          <span class="profile__credit-sep" aria-hidden="true"></span>
+          <a class="profile__credit" href="https://t.me/rivalvisuals" target="_blank" rel="noopener noreferrer">rivalvisuals.t.me</a>
+        </footer>
+      </div>
 
     </article>
   </main>
