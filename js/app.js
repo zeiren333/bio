@@ -21,9 +21,15 @@
   var main = doc.getElementById("main");
   var scene = doc.querySelector(".scene");
   var bokeh = doc.querySelector(".scene__bokeh");
+  var card = doc.querySelector(".profile");
+  var linkRows = doc.querySelectorAll(".profile__link");
+  var portalDisc = doc.querySelector(".portal__disc");
   var canvas = doc.getElementById("warp-canvas");
   var ctx = canvas && canvas.getContext ? canvas.getContext("2d") : null;
   var motionQuery = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+  var glassAvailable = !!(window.LiquidGlass && typeof window.LiquidGlass.apply === "function");
+  var contentGlassDone = false;
+  var toastGlass = null;
 
   if (!intro || !portal || !audio || !sound) {
     return;
@@ -51,7 +57,8 @@
     toastHideTimer: 0,
     lastPercent: -1,
     lastStatus: -1,
-    lastDraw: 0
+    lastDraw: 0,
+    glassTimer: 0
   };
   var canvasWidth = 0;
   var canvasHeight = 0;
@@ -218,6 +225,7 @@
 
     window.clearTimeout(state.toastHideTimer);
     toast.hidden = false;
+    initToastGlass();
 
     window.requestAnimationFrame(function () {
       toast.classList.add("is-visible");
@@ -239,6 +247,140 @@
     state.toastHideTimer = window.setTimeout(function () {
       toast.hidden = true;
     }, 450);
+  }
+
+  /* --------------------------------------------------------------
+     Liquid glass. Glasskit refracts the live backdrop with an SVG
+     displacement map in Chromium and falls back to its own CSS
+     material elsewhere. The card is built only after its entry scale
+     finishes: the map is measured from getBoundingClientRect().
+     -------------------------------------------------------------- */
+  function applyGlass(el, options) {
+    if (!glassAvailable || !el) {
+      return null;
+    }
+
+    try {
+      var instance = window.LiquidGlass.apply(el, options);
+      if (instance) {
+        el.classList.add("has-glass");
+      }
+      return instance;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function initPortalGlass() {
+    if (!portalDisc || portalDisc.classList.contains("has-glass")) {
+      return;
+    }
+
+    applyGlass(portalDisc, {
+      mode: "auto",
+      frost: 10,
+      refraction: 34,
+      depth: 16,
+      dispersion: .14,
+      splay: .12,
+      lightAngle: -48,
+      lightIntensity: .5,
+      curvature: 2.4,
+      bevel: 1,
+      tint: "radial-gradient(circle at 50% 32%, rgba(78, 170, 220, .3), rgba(5, 24, 43, .62) 62%, rgba(2, 10, 22, .78))",
+      sheen: .18,
+      saturate: 1.35,
+      brightness: 1.02,
+      shadow: "none"
+    });
+  }
+
+  function initContentGlass() {
+    if (contentGlassDone) {
+      return;
+    }
+
+    contentGlassDone = true;
+
+    applyGlass(card, {
+      mode: "css",
+      frost: 18,
+      refraction: 42,
+      depth: 24,
+      dispersion: .16,
+      splay: .16,
+      lightAngle: -48,
+      lightIntensity: .42,
+      curvature: 2.5,
+      bevel: 1,
+      tint: "linear-gradient(158deg, rgba(220, 240, 255, .17), rgba(150, 195, 230, .06) 52%, rgba(215, 238, 255, .12))",
+      sheen: .2,
+      saturate: 1.3,
+      brightness: 1.03,
+      shadow: "none"
+    });
+
+    for (var index = 0; index < linkRows.length; index += 1) {
+      applyGlass(linkRows[index], {
+        mode: "auto",
+        frost: 8,
+        refraction: 28,
+        depth: 12,
+        dispersion: .1,
+        splay: .08,
+        lightAngle: -48,
+        lightIntensity: .32,
+        curvature: 2.2,
+        bevel: 1,
+        tint: "linear-gradient(118deg, rgba(255, 255, 255, .2), rgba(255, 255, 255, .06))",
+        sheen: .12,
+        saturate: 1.2,
+        brightness: 1.03,
+        shadow: "none"
+      });
+    }
+
+    applyGlass(sound, {
+      mode: "auto",
+      frost: 10,
+      refraction: 24,
+      depth: 10,
+      dispersion: .1,
+      splay: .08,
+      lightAngle: -48,
+      lightIntensity: .36,
+      curvature: 2.2,
+      bevel: 1,
+      tint: "linear-gradient(180deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, .04))",
+      sheen: .14,
+      saturate: 1.25,
+      brightness: 1.03,
+      shadow: "none"
+    });
+  }
+
+  function initToastGlass() {
+    if (toastGlass || !toast || toast.hidden) {
+      return;
+    }
+
+    toastGlass = applyGlass(toast, {
+      mode: "auto",
+      frost: 12,
+      refraction: 24,
+      depth: 12,
+      dispersion: .08,
+      splay: .1,
+      lightAngle: -48,
+      lightIntensity: .3,
+      curvature: 2.4,
+      bevel: 1,
+      tint: "linear-gradient(180deg, rgba(14, 36, 58, .68), rgba(5, 18, 32, .62))",
+      sheen: .08,
+      saturate: 1.2,
+      brightness: 1,
+      shadow: "none"
+    });
   }
 
   /* --------------------------------------------------------------
@@ -595,6 +737,9 @@
     state.audioTarget = AFTER_VOLUME;
     ensureLoop();
 
+    window.clearTimeout(state.glassTimer);
+    state.glassTimer = window.setTimeout(initContentGlass, reduceMotion ? 80 : 930);
+
     window.setTimeout(function () {
       if (!main) {
         return;
@@ -853,4 +998,9 @@
   ensureLoop();
   initBokeh();
   initParallax();
+  initPortalGlass();
+
+  if (body.classList.contains("page--started")) {
+    initContentGlass();
+  }
 })();

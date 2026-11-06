@@ -1,0 +1,541 @@
+/*!
+ * liquid-glass.js — drop-in "Figma Glass" / Apple Liquid Glass for any element.
+ * Zero dependencies. UMD (window.LiquidGlass + CommonJS) + <glass-kit> web component.
+ *
+ *   const g = LiquidGlass.apply(el, { mode: 'auto', refraction: 90, dispersion: 0.5 });
+ *   g.update({ frost: 12 });   g.destroy();
+ *
+ * MODES (the switch nobody else gives you):
+ *   'css'       blur + tint + highlight. Every browser. No real refraction.
+ *   'svg'       real refraction on the LIVE backdrop via backdrop-filter. CHROMIUM ONLY.
+ *   'svg-clone' real refraction in Chrome / Safari / Firefox by cloning a `background`
+ *               element and filtering the clone. Cross-browser. Refracts DOM (not <canvas>).
+ *   'webgl'     real refraction in a shader of a supplied `background` (img/canvas/video).
+ *   'auto'      Chromium -> 'svg'; else `background` set -> 'svg-clone'; else 'css'.
+ *
+ * Params map onto Figma's Glass panel: frost, refraction, depth, dispersion, splay,
+ * lightAngle, lightIntensity (+ optical extras: curvature, convexity, tint).
+ */
+(function (root, factory) {
+  if (typeof module !== 'undefined' && module.exports) module.exports = factory();
+  else { root.Glasskit = root.LiquidGlass = factory(); }
+})(typeof window !== 'undefined' ? window : this, function () {
+  'use strict';
+
+  var UID = 0;
+  var XLINK = 'http://www.w3.org/1999/xlink';
+
+  var DEFAULTS = {
+    mode: 'auto',
+    frost: 6,             // Figma "Frost"      — backdrop blur (px)
+    refraction: 90,       // Figma "Refraction" — edge displacement strength (px)
+    depth: 22,            // Figma "Depth"      — bezel width (px)
+    dispersion: 0.4,      // Figma "Dispersion" — chromatic aberration (0..1)
+    splay: 0,             // Figma "Splay"      — softens/widens bezel falloff (0..1)
+    lightAngle: -45,      // Figma "Light" angle (deg)
+    lightIntensity: 0.8,  // Figma "Light" %    — specular highlight (0..1)
+    curvature: 2.2,       // profile exponent: ~2 spherical, ~4 squircle
+    convexity: 1,         // +1 convex (magnify) .. 0 flat .. -1 concave (shrink)
+    bevel: 1,             // directional edge "thickness" (1 = full 3D bevel, 0 = flat pane + border only)
+    tint: '255,255,255',  // "r,g,b"
+    tintOpacity: 0.08,
+    sheen: 0.7,           // diagonal gloss over the card FACE (0 = remove; border stays)
+    sheenColor: '255,255,255', // "r,g,b" or any CSS color — recolor the gloss
+    sheenAngle: null,     // gloss direction (deg); null = follow lightAngle
+    saturate: 1.4,
+    brightness: 1.04,
+    shadow: '0 8px 30px rgba(0,0,0,0.18)', // outer drop shadow; 'none'/'' removes it, or pass any CSS box-shadow
+    radius: null,         // null = read element border-radius
+    background: null      // Element|selector — required for 'svg-clone' & 'webgl'
+  };
+
+  /* ---------------------------- helpers ---------------------------- */
+  function isChromium() {
+    if (typeof navigator === 'undefined' || typeof window === 'undefined') return false;
+    var ua = navigator.userAgent;
+    var chromium = /(Chrome|Chromium|Edg|OPR)\//.test(ua) && !/\bEdge\//.test(ua);
+    var ok = !!(window.CSS && CSS.supports &&
+      (CSS.supports('backdrop-filter', 'blur(1px)') || CSS.supports('-webkit-backdrop-filter', 'blur(1px)')));
+    return chromium && ok;
+  }
+  function clamp8(v) { return v < 0 ? 0 : v > 255 ? 255 : Math.round(v); }
+  // only ever emit a clean "r,g,b" triplet into inline CSS — blocks url()/expression smuggling
+  function safeRGB(v) { return (typeof v === 'string' && /^\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*$/.test(v)) ? v.replace(/\s+/g, '') : '255,255,255'; }
+  // allow only box-shadow-shaped CSS (lengths/colors); reject url()/expression/extra declarations
+  function safeShadow(v) {
+    if (typeof v !== 'string' || !v || v === 'none') return '';
+    return /url\(|expression|javascript:|[;{}<>]/i.test(v) ? '' : v;
+  }
+  // allow CSS gradient values only; block url()/image-set()/extra declarations
+  function safeGradient(v) {
+    if (typeof v !== 'string') return '';
+    if (/url\(|image-set|element\(|expression|javascript:|[;{}<>]/i.test(v)) return '';
+    return /(^|\s)(repeating-)?(linear|radial|conic)-gradient\(/i.test(v) ? v : '';
+  }
+  function num(v, d) { var n = parseFloat(v); return isFinite(n) ? n : d; }
+  // any CSS color value (rgb/rgba/hsl/hex/named), minus injection vectors
+  function safeColor(v) { return (typeof v === 'string' && v && !/url\(|image-set|expression|javascript:|[;{}<>]/i.test(v)) ? v : ''; }
+  // tint background, accepting (in order): a bare "r,g,b" triplet (+ tintOpacity),
+  // a CSS gradient, or any CSS color (rgb/rgba/hsl/hex/named — its own alpha respected).
+  function tintValue(o) {
+    var t = typeof o.tint === 'string' ? o.tint.trim() : '';
+    if (/^\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}$/.test(t)) return 'rgba(' + t.replace(/\s+/g, '') + ',' + num(o.tintOpacity, 0.08) + ')';
+    if (/gradient\(/i.test(t)) { var g = safeGradient(t); if (g) return g; }
+    var c = safeColor(t); if (c) return c;
+    return 'rgba(255,255,255,' + num(o.tintOpacity, 0.08) + ')';
+  }
+  // gloss gradient stops [bright, mid-transparent, dim], accepting a bare "r,g,b"
+  // triplet OR any CSS color (rgb/rgba/hsl/hex/named). `sh` scales the opacity.
+  function sheenStops(o, sh) {
+    var raw = typeof o.sheenColor === 'string' ? o.sheenColor.trim() : '';
+    var a0 = (0.6 * sh).toFixed(3), a1 = (0.14 * sh).toFixed(3);
+    if (/^\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}$/.test(raw)) {
+      var t = raw.replace(/\s+/g, '');
+      return ['rgba(' + t + ',' + a0 + ')', 'rgba(' + t + ',0)', 'rgba(' + t + ',' + a1 + ')'];
+    }
+    var c = safeColor(raw);
+    if (c) return [
+      'color-mix(in srgb,' + c + ' ' + (60 * sh).toFixed(1) + '%,transparent)',
+      'transparent',
+      'color-mix(in srgb,' + c + ' ' + (14 * sh).toFixed(1) + '%,transparent)'
+    ];
+    return ['rgba(255,255,255,' + a0 + ')', 'rgba(255,255,255,0)', 'rgba(255,255,255,' + a1 + ')'];
+  }
+  function resolveEl(x) { return typeof x === 'string' ? document.querySelector(x) : x; }
+  function readRadius(el) { return parseFloat(getComputedStyle(el).borderRadius) || 0; }
+  function ns(tag) { return document.createElementNS('http://www.w3.org/2000/svg', tag); }
+
+  function pickMode(requested, hasBackground) {
+    if (requested && requested !== 'auto') return requested;
+    if (isChromium()) return 'svg';
+    return hasBackground ? 'svg-clone' : 'css';
+  }
+
+  /* rounded-box signed distance field (negative inside) */
+  function sdf(x, y, hw, hh, r) {
+    var qx = Math.abs(x - hw) - (hw - r);
+    var qy = Math.abs(y - hh) - (hh - r);
+    return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
+  }
+
+  /* displacement map: R = x-shift, G = y-shift, 128 = neutral.
+   * Only the bezel band displaces anything, so the map is built ring-only:
+   *  - the SDF field is evaluated once per cell (the naive version cost 5 sdf() per pixel);
+   *  - the interior is prefilled neutral and skipped — the rounded border lies at most
+   *    r·(√2−1) inside the straight edges, so any pixel deeper than bezel + 0.415·r
+   *    from every edge is provably neutral;
+   *  - identical (size, params) maps are served from a small LRU (repeated buttons/cards). */
+  var NEUTRAL = (function () {
+    var u8 = new Uint8Array(4); u8[0] = u8[1] = u8[2] = 128; u8[3] = 255;
+    return new Uint32Array(u8.buffer)[0];
+  })();
+  var MAP_CACHE = typeof Map !== 'undefined' ? new Map() : null;
+  var MAP_CACHE_MAX = 24;
+
+  function buildMap(w, h, radius, bezel, splay, curvature, convexity) {
+    w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+    var key = w + '|' + h + '|' + radius + '|' + bezel + '|' + splay + '|' + curvature + '|' + convexity;
+    if (MAP_CACHE) {
+      var hit = MAP_CACHE.get(key);
+      if (hit) { MAP_CACHE.delete(key); MAP_CACHE.set(key, hit); return hit; }
+    }
+    var cvs = document.createElement('canvas'); cvs.width = w; cvs.height = h;
+    var ctx = cvs.getContext('2d');
+    var img = ctx.createImageData(w, h), data = img.data;
+    var hw = w / 2, hh = h / 2, r = Math.min(radius, hw, hh), b = Math.max(1, bezel);
+    var exp = Math.max(0.3, curvature * (1 - 0.5 * splay));
+
+    new Uint32Array(data.buffer).fill(NEUTRAL);
+
+    var band = Math.ceil(b + 0.4142 * r) + 2;   // conservative bezel-band bound (+2 safety)
+
+    // SDF field, one evaluation per cell, with a 1px apron for the centred gradients.
+    // Deep-interior cells are never read (their pixels stay neutral) so they're not computed.
+    var fw = w + 2, F = new Float64Array(fw * (h + 2));
+    var fullFieldX = (w <= 2 * (band + 2));
+    for (var fy = -1; fy <= h; fy++) {
+      var yc = fy + 0.5, rowOff = (fy + 1) * fw + 1, fx;
+      if (fullFieldX || Math.min(yc, h - yc) <= band + 1) {
+        for (fx = -1; fx <= w; fx++) F[rowOff + fx] = sdf(fx + 0.5, yc, hw, hh, r);
+      } else {
+        for (fx = -1; fx <= band; fx++) F[rowOff + fx] = sdf(fx + 0.5, yc, hw, hh, r);
+        for (fx = w - band - 1; fx <= w; fx++) F[rowOff + fx] = sdf(fx + 0.5, yc, hw, hh, r);
+      }
+    }
+
+    var fullRowX = (w <= 2 * band);
+    for (var y = 0; y < h; y++) {
+      var rowC = (y + 1) * fw + 1, rowU = y * fw + 1, rowD = (y + 2) * fw + 1;
+      var edgeRow = fullRowX || Math.min(y + 0.5, h - y - 0.5) <= band;
+      for (var x = 0; x < w; x++) {
+        if (!edgeRow && x === band) x = w - band;   // hop the provably-neutral interior
+        var d = F[rowC + x], m = 0;
+        if (d < 0 && d > -b) { var t = -d / b; m = Math.pow(1 - t, exp) * convexity; }
+        if (m === 0) continue;                      // prefilled neutral
+        var nx = F[rowC + x + 1] - F[rowC + x - 1];
+        var nyv = F[rowD + x] - F[rowU + x];
+        var nl = Math.hypot(nx, nyv) || 1;
+        var i = (y * w + x) * 4;
+        data[i] = clamp8(128 - (nx / nl) * m * 127);
+        data[i + 1] = clamp8(128 - (nyv / nl) * m * 127);
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    var url = cvs.toDataURL();
+    if (MAP_CACHE) {
+      MAP_CACHE.set(key, url);
+      if (MAP_CACHE.size > MAP_CACHE_MAX) MAP_CACHE.delete(MAP_CACHE.keys().next().value);
+    }
+    return url;
+  }
+
+  /* ============================ instance ============================ */
+  function apply(el, options) {
+    var o = Object.assign({}, DEFAULTS, options || {});
+    var bg = resolveEl(o.background);
+    var id = 'lg' + (++UID);
+    var mode = pickMode(o.mode, !!bg);
+    // graceful fallback if a refraction mode lacks its background source
+    if ((mode === 'svg-clone' || mode === 'webgl') && !bg) mode = isChromium() ? 'svg' : 'css';
+
+    if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+    var prevBg = el.style.background, prevRadius = el.style.borderRadius;
+
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:2;';
+    el.appendChild(overlay);
+
+    // directional edge-light ring: a conic gradient masked to the border, so the rim is
+    // brightest on the two edges aligned with the light and dim on the perpendicular ones.
+    var rim = document.createElement('div');
+    rim.style.cssText = 'position:absolute;inset:0;box-sizing:border-box;border-radius:inherit;pointer-events:none;z-index:3;' +
+      '-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;' +
+      'mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask-composite:exclude;';
+    el.appendChild(rim);
+
+    var svg, filter, feImage, feR, feG, feB, feBlur;
+    var lensWrap, clone;            // svg-clone
+    var glcanvas, gl, glState;      // webgl
+    var rafId = 0;
+    var lastMapKey = '';
+
+    if (mode === 'svg' || mode === 'svg-clone') buildSvgFilter();
+    if (mode === 'svg-clone') buildClone();
+    if (mode === 'webgl') buildGL();
+
+    /* ---- SVG filter (shared by backdrop + clone modes) ---- */
+    function buildSvgFilter() {
+      svg = ns('svg');
+      svg.setAttribute('width', '0'); svg.setAttribute('height', '0');
+      svg.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;';
+      var defs = ns('defs');
+      filter = ns('filter');
+      filter.setAttribute('id', id);
+      filter.setAttribute('filterUnits', 'userSpaceOnUse');
+      filter.setAttribute('color-interpolation-filters', 'sRGB');
+      feImage = ns('feImage');
+      feImage.setAttribute('result', 'map');
+      feImage.setAttribute('preserveAspectRatio', 'none');
+      feR = disp('pR'); var mR = chan('mr', 'pR', 'r');
+      feG = disp('pG'); var mG = chan('mg', 'pG', 'g');
+      feB = disp('pB'); var mB = chan('mb', 'pB', 'b');
+      var b1 = blend('mr', 'mg', 'rg'), b2 = blend('rg', 'mb', 'rgb');
+      feBlur = ns('feGaussianBlur'); feBlur.setAttribute('in', 'rgb');
+      [feImage, feR, mR, feG, mG, feB, mB, b1, b2, feBlur].forEach(function (n) { filter.appendChild(n); });
+      defs.appendChild(filter); svg.appendChild(defs); document.body.appendChild(svg);
+
+      function disp(res) {
+        var f = ns('feDisplacementMap');
+        f.setAttribute('in', 'SourceGraphic'); f.setAttribute('in2', 'map');
+        f.setAttribute('xChannelSelector', 'R'); f.setAttribute('yChannelSelector', 'G');
+        f.setAttribute('result', res); return f;
+      }
+      function chan(res, inp, w) {
+        var f = ns('feColorMatrix'); f.setAttribute('in', inp); f.setAttribute('result', res);
+        f.setAttribute('type', 'matrix');
+        f.setAttribute('values',
+          w === 'r' ? '1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0' :
+          w === 'g' ? '0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 1 0' :
+                      '0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 1 0'); return f;
+      }
+      function blend(a, b, res) {
+        var f = ns('feBlend'); f.setAttribute('in', a); f.setAttribute('in2', b);
+        f.setAttribute('mode', 'screen'); f.setAttribute('result', res); return f;
+      }
+    }
+
+    function refreshMap() {
+      if (mode !== 'svg' && mode !== 'svg-clone') return;
+      var r = el.getBoundingClientRect();
+      var rad = o.radius == null ? readRadius(el) : o.radius;
+      var key = [Math.round(r.width), Math.round(r.height), rad, o.depth, o.splay, o.curvature, o.convexity].join(',');
+      if (key === lastMapKey) return;
+      lastMapKey = key;
+      var url = buildMap(r.width, r.height, rad, o.depth, o.splay, o.curvature, o.convexity);
+      feImage.setAttribute('href', url);
+      feImage.setAttributeNS(XLINK, 'xlink:href', url);
+      feImage.setAttribute('width', r.width); feImage.setAttribute('height', r.height);
+      if (mode === 'svg') {
+        // backdrop-filter applies in the element's own space → region is 0,0,w,h
+        feImage.setAttribute('x', 0); feImage.setAttribute('y', 0);
+        filter.setAttribute('x', 0); filter.setAttribute('y', 0);
+        filter.setAttribute('width', r.width); filter.setAttribute('height', r.height);
+      }
+      // clone mode: the map + filter region track the visible window every frame (syncClone)
+    }
+
+    /* ---- clone layer (cross-browser refraction) ---- */
+    function buildClone() {
+      lensWrap = document.createElement('div');
+      lensWrap.style.cssText = 'position:absolute;inset:0;border-radius:inherit;overflow:hidden;z-index:0;pointer-events:none;';
+      clone = bg.cloneNode(true);
+      clone.removeAttribute('id');
+      clone.style.position = 'absolute';
+      clone.style.margin = '0';
+      clone.style.filter = 'url(#' + id + ')';
+      clone.style.webkitFilter = 'url(#' + id + ')';
+      lensWrap.appendChild(clone);
+      el.insertBefore(lensWrap, overlay);
+      el.style.backgroundColor = 'transparent';
+      syncClone();
+    }
+    function syncClone() {
+      if (!clone) return;
+      var er = el.getBoundingClientRect(), br = bg.getBoundingClientRect();
+      clone.style.left = (br.left - er.left) + 'px';
+      clone.style.top = (br.top - er.top) + 'px';
+      clone.style.width = br.width + 'px';
+      clone.style.height = br.height + 'px';
+      // The filter runs in the clone's user space (origin = background top-left). Move the
+      // displacement map + filter region to sit exactly over the glass window, wherever it is.
+      var ox = er.left - br.left, oy = er.top - br.top, pad = Math.ceil(o.frost * 2 + 12);
+      feImage.setAttribute('x', ox); feImage.setAttribute('y', oy);
+      filter.setAttribute('x', ox - pad); filter.setAttribute('y', oy - pad);
+      filter.setAttribute('width', er.width + pad * 2); filter.setAttribute('height', er.height + pad * 2);
+    }
+    function reclone() {
+      if (!lensWrap) return;
+      var nc = bg.cloneNode(true);
+      nc.removeAttribute('id'); nc.style.position = 'absolute'; nc.style.margin = '0';
+      nc.style.filter = 'url(#' + id + ')'; nc.style.webkitFilter = 'url(#' + id + ')';
+      lensWrap.replaceChild(nc, clone); clone = nc; syncClone();
+    }
+
+    /* ---- apply backdrop/filter scales + frost ---- */
+    function applyFilterParams() {
+      var k = o.dispersion * 0.4;
+      if (feR) {
+        feR.setAttribute('scale', o.refraction * (1 - k));
+        feG.setAttribute('scale', o.refraction);
+        feB.setAttribute('scale', o.refraction * (1 + k));
+        feBlur.setAttribute('stdDeviation', o.frost);
+      }
+      if (mode === 'svg') {
+        var f = 'url(#' + id + ')'; el.style.backdropFilter = f; el.style.webkitBackdropFilter = f;
+      } else if (mode === 'css') {
+        var c = 'blur(' + num(o.frost, 6) + 'px) saturate(' + num(o.saturate, 1.4) + ') brightness(' + num(o.brightness, 1.04) + ')';
+        el.style.backdropFilter = c; el.style.webkitBackdropFilter = c;
+      }
+    }
+
+    /* ---- tint + specular overlay (all modes) ---- */
+    function applyOverlay() {
+      var li = num(o.lightIntensity, 0.8), a = (num(o.lightAngle, -45) + 90) * Math.PI / 180;
+      var tintBg = tintValue(o);
+      // FACE gloss — controlled by `sheen`/`sheenColor`/`sheenAngle`, independent of the border light below
+      var sh = num(o.sheen, 0.7);
+      var sAng = o.sheenAngle == null ? (num(o.lightAngle, -45) + 90) : num(o.sheenAngle, 45);
+      var st = sheenStops(o, sh);
+      var sheenBg = sh <= 0 ? '' :
+        'linear-gradient(' + sAng.toFixed(1) + 'deg,' + st[0] + ' 0%,' + st[1] +
+        ' 30%,' + st[1] + ' 70%,' + st[2] + ' 100%)';
+      if (mode === 'css' || mode === 'svg') {
+        // the element itself is the glass: tint goes on its background, sheen on the overlay above
+        el.style.background = tintBg;
+        overlay.style.background = sheenBg || 'none';
+      } else {
+        // svg-clone / webgl: the element is transparent (refraction lives in a layer below),
+        // so the tint rides on the overlay, under the sheen, above the refraction
+        overlay.style.background = sheenBg ? sheenBg + ',' + tintBg : tintBg;
+      }
+      // depth: a subtle inner shadow on the side away from the light (scales with `bevel`),
+      // plus the outer drop shadow. The bright edge light is handled by the conic rim below.
+      var bv = num(o.bevel, 1);
+      var la = num(o.lightAngle, -45);
+      var insets = 'inset ' + (-Math.cos(a) * 2).toFixed(1) + 'px ' + (-Math.sin(a) * 2).toFixed(1) + 'px 6px rgba(0,0,0,' + (0.15 * bv).toFixed(3) + ')';
+      var drop = safeShadow(o.shadow);
+      overlay.style.boxShadow = drop ? insets + ',' + drop : insets;
+
+      // Apple-style rim: peaks on the two edges along the light axis, dim on the perpendicular edges.
+      var rw = (0.6 + 0.5 * bv).toFixed(2);               // hairline rim (~1px), barely grows with bevel
+      var hi = (0.9 * li).toFixed(3), lo = (0.05 * li).toFixed(3);
+      rim.style.padding = rw + 'px';
+      rim.style.background = 'conic-gradient(from ' + (la + 90).toFixed(1) + 'deg,' +
+        'rgba(255,255,255,' + hi + '),rgba(255,255,255,' + lo + ') 90deg,' +
+        'rgba(255,255,255,' + hi + ') 180deg,rgba(255,255,255,' + lo + ') 270deg,' +
+        'rgba(255,255,255,' + hi + '))';
+    }
+
+    /* ------------------------------ WebGL ------------------------------ */
+    function buildGL() {
+      glcanvas = document.createElement('canvas');
+      glcanvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border-radius:inherit;pointer-events:none;z-index:0;';
+      el.insertBefore(glcanvas, overlay);
+      el.style.backgroundColor = 'transparent';
+      gl = glcanvas.getContext('webgl', { premultipliedAlpha: false, alpha: true });
+      if (!gl) { mode = 'css'; applyFilterParams(); return; }
+      var vs = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+      var fs = [
+        'precision highp float;',
+        'uniform sampler2D u_bg;uniform vec2 u_win,u_origin,u_size,u_light;',
+        'uniform float u_radius,u_bezel,u_refraction,u_dispersion,u_frost,u_lightI,u_curv,u_convex;',
+        'float sd(vec2 p,vec2 b,float r){vec2 q=abs(p)-b+r;return min(max(q.x,q.y),0.)+length(max(q,0.))-r;}',
+        'vec4 bl(vec2 uv,float rad){if(rad<0.5)return texture2D(u_bg,uv);vec2 px=rad/u_win;vec4 c=vec4(0.);for(int i=-2;i<=2;i++){for(int j=-2;j<=2;j++){c+=texture2D(u_bg,uv+vec2(float(i),float(j))*px*0.5);}}return c/25.;}',
+        'void main(){',
+        ' vec2 fc=vec2(gl_FragCoord.x,u_size.y-gl_FragCoord.y);',
+        ' vec2 c=fc-u_size*0.5;vec2 b=u_size*0.5;float r=min(u_radius,min(b.x,b.y));',
+        ' float d=sd(c,b,r);float e=1.0;',
+        ' float dx=sd(c+vec2(e,0.),b,r)-sd(c-vec2(e,0.),b,r);',
+        ' float dy=sd(c+vec2(0.,e),b,r)-sd(c-vec2(0.,e),b,r);',
+        ' vec2 n=normalize(vec2(dx,dy)+1e-6);',
+        ' float m=0.;if(d<0.&&d>-u_bezel){float t=-d/u_bezel;m=pow(1.-t,u_curv)*u_convex;}',
+        ' vec2 disp=-n*m*u_refraction;vec2 base=u_origin+fc;float k=u_dispersion*0.4;',
+        ' vec4 cr=bl((base+disp*(1.-k))/u_win,u_frost);',
+        ' vec4 cg=bl((base+disp)/u_win,u_frost);',
+        ' vec4 cb=bl((base+disp*(1.+k))/u_win,u_frost);',
+        ' vec3 col=vec3(cr.r,cg.g,cb.b);',
+        ' float spec=pow(max(dot(n,u_light),0.),4.)*abs(m)*u_lightI;col+=spec+0.04*u_lightI*abs(m);',
+        ' float al=smoothstep(0.75,-0.75,d);gl_FragColor=vec4(col,al);}'
+      ].join('\n');
+      var prog = linkProg(vs, fs); gl.useProgram(prog);
+      var buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(prog, 'p'); gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      var tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); // uv.y is top-origin to match the element math
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      glState = { prog: prog, tex: tex, src: null };
+      loadGLBg(bg);
+
+      function linkProg(v, f) {
+        function sh(t, s) { var x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x);
+          if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) console.warn('LG shader:', gl.getShaderInfoLog(x)); return x; }
+        var p = gl.createProgram();
+        gl.attachShader(p, sh(gl.VERTEX_SHADER, v)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, f));
+        gl.linkProgram(p); return p;
+      }
+    }
+    function loadGLBg(src) {
+      if (!gl || !src) return;
+      if (typeof src === 'string') { var im = new Image(); im.crossOrigin = 'anonymous'; im.onload = function () { glState.src = im; uploadGL(im); }; im.src = src; }
+      else { glState.src = src; uploadGL(src); }
+    }
+    function uploadGL(src) {
+      if (!gl || !src) return;
+      gl.bindTexture(gl.TEXTURE_2D, glState.tex);
+      try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src); } catch (e) {}
+    }
+    function renderGL() {
+      if (!gl || !glState || !glState.src) return;
+      // render the drawing buffer at device-pixel resolution so high-frequency
+      // detail (text edges) doesn't alias when the browser upscales on HiDPI screens.
+      var dpr = window.devicePixelRatio || 1;
+      var r = el.getBoundingClientRect();
+      var w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+      if (glcanvas.width !== w || glcanvas.height !== h) { glcanvas.width = w; glcanvas.height = h; }
+      gl.viewport(0, 0, w, h);
+      var tag = glState.src.tagName;
+      if (tag === 'CANVAS' || tag === 'VIDEO') uploadGL(glState.src);
+      var p = glState.prog, U = function (n) { return gl.getUniformLocation(p, n); };
+      var rad = o.radius == null ? readRadius(el) : o.radius, a = o.lightAngle * Math.PI / 180;
+      // every pixel-space uniform scales by dpr together, keeping the shader internally consistent
+      // sample UVs are relative to the BACKGROUND's on-screen rect, not the window
+      var br = bg && bg.getBoundingClientRect ? bg.getBoundingClientRect() : null;
+      var bw = br && br.width ? br.width : innerWidth, bh = br && br.height ? br.height : innerHeight;
+      gl.uniform2f(U('u_win'), bw * dpr, bh * dpr);
+      gl.uniform2f(U('u_origin'), (br && br.width ? r.left - br.left : r.left) * dpr, (br && br.height ? r.top - br.top : r.top) * dpr);
+      gl.uniform2f(U('u_size'), w, h);
+      gl.uniform1f(U('u_radius'), rad * dpr);
+      gl.uniform1f(U('u_bezel'), o.depth * dpr);
+      gl.uniform1f(U('u_refraction'), o.refraction * dpr);
+      gl.uniform1f(U('u_dispersion'), o.dispersion);
+      gl.uniform1f(U('u_frost'), o.frost * dpr);
+      gl.uniform1f(U('u_curv'), o.curvature);
+      gl.uniform1f(U('u_convex'), o.convexity);
+      gl.uniform1f(U('u_lightI'), o.lightIntensity);
+      gl.uniform2f(U('u_light'), Math.cos(a), Math.sin(a));
+      gl.uniform1i(U('u_bg'), 0);
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
+    /* ---- per-frame loop only for modes that need positional sync ---- */
+    function tick() { if (mode === 'svg-clone') syncClone(); else if (mode === 'webgl') renderGL(); rafId = requestAnimationFrame(tick); }
+    if (mode === 'svg-clone' || mode === 'webgl') rafId = requestAnimationFrame(tick);
+
+    var ro = new ResizeObserver(function () { refreshMap(); if (mode === 'svg-clone') syncClone(); });
+    ro.observe(el);
+
+    // when an explicit radius is given, round the element itself (not just the refraction map)
+    function applyRadius() { if (o.radius != null) el.style.borderRadius = num(o.radius, 0) + 'px'; }
+
+    refreshMap(); applyFilterParams(); applyOverlay(); applyRadius();
+
+    var instance = {
+      el: el, mode: mode,
+      update: function (patch) {
+        Object.assign(o, patch || {});
+        if (patch && patch.background != null && mode === 'webgl') loadGLBg(resolveEl(o.background));
+        refreshMap(); applyFilterParams(); applyOverlay(); applyRadius();
+        return instance;
+      },
+      refresh: function () { if (mode === 'svg-clone') reclone(); else if (mode === 'webgl') loadGLBg(resolveEl(o.background)); return instance; },
+      destroy: function () {
+        if (rafId) cancelAnimationFrame(rafId);
+        ro.disconnect();
+        // free the WebGL context explicitly — browsers cap ~16 per page
+        if (gl) { var lc = gl.getExtension('WEBGL_lose_context'); if (lc) lc.loseContext(); gl = null; }
+        [svg, lensWrap, glcanvas, overlay, rim].forEach(function (n) { if (n && n.parentNode) n.parentNode.removeChild(n); });
+        el.style.backdropFilter = ''; el.style.webkitBackdropFilter = ''; el.style.background = prevBg; el.style.borderRadius = prevRadius;
+      }
+    };
+    return instance;
+  }
+
+  /* ===================== <glass-kit> web component ===================== */
+  var ATTRS = ['mode', 'frost', 'refraction', 'depth', 'dispersion', 'splay', 'light-angle',
+    'light-intensity', 'curvature', 'convexity', 'bevel', 'tint', 'tint-opacity', 'sheen', 'sheen-color',
+    'sheen-angle', 'shadow', 'radius', 'background'];
+  function camel(s) { return s.replace(/-([a-z])/g, function (_, c) { return c.toUpperCase(); }); }
+  function defineElement() {
+    if (typeof customElements === 'undefined' || customElements.get('glass-kit')) return;
+    var Base = (typeof HTMLElement !== 'undefined') ? HTMLElement : function () {};
+    function readOpts(node) {
+      var opts = {};
+      ATTRS.forEach(function (a) {
+        if (!node.hasAttribute(a)) return;
+        var v = node.getAttribute(a), key = camel(a);
+        opts[key] = (a === 'mode' || a === 'tint' || a === 'sheen-color' || a === 'shadow' || a === 'background') ? v : parseFloat(v);
+      });
+      return opts;
+    }
+    var C = function () { return Reflect.construct(Base, [], C); };
+    C.prototype = Object.create(Base.prototype);
+    C.observedAttributes = ATTRS;
+    C.prototype.connectedCallback = function () {
+      var self = this; if (this.style.display === '') this.style.display = 'block';
+      requestAnimationFrame(function () { self._lg = apply(self, readOpts(self)); });
+    };
+    C.prototype.attributeChangedCallback = function () { if (this._lg) this._lg.update(readOpts(this)); };
+    C.prototype.disconnectedCallback = function () { if (this._lg) { this._lg.destroy(); this._lg = null; } };
+    try { customElements.define('glass-kit', C); } catch (e) {}
+  }
+  if (typeof window !== 'undefined') { if (document.readyState !== 'loading') defineElement(); else document.addEventListener('DOMContentLoaded', defineElement); }
+
+  return { apply: apply, defineElement: defineElement, isChromium: isChromium, pickMode: pickMode, DEFAULTS: DEFAULTS, version: '1.3.0' };
+});
