@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0b2a44" />
   <meta name="color-scheme" content="dark" />
-  <meta name="description" content="Wiskas — искусство, море и мечты. Все мои ссылки в одном месте." />
+  <meta name="description" content="Wiskas — искусство, море и мечты. Зажми портал на 3 секунды, чтобы услышать море." />
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Wiskas — link in bio" />
-  <meta property="og:description" content="Искусство, море и мечты. Коснись, чтобы услышать море." />
+  <meta property="og:description" content="Искусство, море и мечты. Зажми портал на 3 секунды, чтобы услышать море." />
   <meta property="og:image" content="./assets/banner.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <title>Wiskas — link in bio</title>
@@ -136,19 +136,30 @@
   </button>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden>
-    <span class="toast__text">Коснись экрана, чтобы включить звук</span>
+    <span class="toast__text">Зажми портал, чтобы включить звук</span>
   </div>
 
-  <!-- Стартовый экран: одна кнопка, которая запускает страницу и музыку -->
+  <!-- Стартовый экран: портал открывается удержанием кнопки 3 секунды -->
   <div class="intro" id="intro">
+    <canvas class="intro__warp" id="warp-canvas" aria-hidden="true"></canvas>
+    <span class="intro__lens" aria-hidden="true"></span>
+
     <button
-      class="intro__button"
-      id="intro-button"
+      class="portal"
+      id="portal"
       type="button"
-      aria-label="Начать и услышать шум моря"
+      aria-label="Открыть портал: зажми кнопку на 3 секунды"
+      aria-describedby="portal-hint"
     >
-      <span class="intro__title">START</span>
-      <span class="intro__hint">услышать шум моря</span>
+      <span class="portal__core">
+        <span class="portal__orbit" aria-hidden="true"></span>
+        <span class="portal__disc">
+          <span class="portal__value" id="portal-value">0%</span>
+          <span class="portal__label">портал</span>
+        </span>
+      </span>
+      <span class="portal__hint" id="portal-hint">зажми на 3 секунды</span>
+      <span class="sr-only" id="portal-status" role="status" aria-live="polite"></span>
     </button>
   </div>
 
